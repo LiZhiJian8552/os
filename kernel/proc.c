@@ -126,6 +126,8 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  // 创建新进程的时候，syscall_trace 设置为默认值0
+  p->syscall_trace=0;
 
   return p;
 }
@@ -294,6 +296,9 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
+
+  // 子进程继承父进程的syscall_trace
+  np->syscall_trace=p->syscall_trace;
 
   release(&np->lock);
 
@@ -691,5 +696,16 @@ procdump(void)
       state = "???";
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
+  }
+}
+
+// 统计处理活动状态的进程
+void procnum(uint64* dst){
+  *dst=0;
+  struct proc* p;
+  for(p=proc;p<&proc[NPROC];p++){
+    if(p->state!=UNUSED){
+      (*dst)++;
+    }
   }
 }

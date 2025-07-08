@@ -36,3 +36,7 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
+# 添加系统调用接口trace
+entry("trace");
+# 添加系统调用接口sysinfo
+entry("sysinfo");

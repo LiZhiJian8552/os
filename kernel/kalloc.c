@@ -80,3 +80,22 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+
+// 获取空闲内存,将获取的结果存入dst
+void freebytes(uint64* dst){
+  // 制空
+  *dst=0;
+
+  //struct run 是 xv6 内核中用于管理空闲物理内存页的链表节点结构体
+  //kmem 是 xv6 内核中用于管理物理内存分配和回收的全局变量（结构体）
+  struct run* p=kmem.freelist;
+  // 上锁，保证线程安全
+  acquire(&kmem.lock);
+  while(p){
+    *dst+=PGSIZE;
+    p=p->next;
+  }
+  release(&kmem.lock);
+}
+

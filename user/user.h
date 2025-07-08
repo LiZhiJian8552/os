@@ -1,6 +1,9 @@
 struct stat;
 struct rtcdate;
 
+
+
+// 该头文件中存放了所有的系统调用
 // system calls
 int fork(void);
 int exit(int) __attribute__((noreturn));
@@ -23,6 +26,14 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+
+// 用户态程序可以找到trace系统调用的跳板入口函数
+int trace(int);
+
+// 声明sysinfo结构体，使用户程序可以使用这个结构体（已经在kernel/sysinfo.h中定义）
+struct sysinfo;
+// 用户态程序可以找到sysinfo系统调用的跳板入口函数
+int sysinfo(struct sysinfo*);
 
 // ulib.c
 int stat(const char*, struct stat*);
