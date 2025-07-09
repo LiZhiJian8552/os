@@ -9,8 +9,10 @@
 /*
  * the kernel's page table.
  */
+//  指向RISC-V根页表页的指针,既可以指向内核页表（kernel_pagetable），也可以指向某个进程的用户页表。
 pagetable_t kernel_pagetable;
 
+// 内核代码结束位置
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -21,9 +23,12 @@ extern char trampoline[]; // trampoline.S
 void
 kvminit()
 {
+  // 分配内核页
   kernel_pagetable = (pagetable_t) kalloc();
+  // 清空
   memset(kernel_pagetable, 0, PGSIZE);
 
+  // 映射各种硬件设备（MMIO）
   // uart registers
   kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
 
@@ -36,12 +41,15 @@ kvminit()
   // PLIC
   kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
 
+  // 映射内核代码
   // map kernel text executable and read-only.
   kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
 
+  // 映射内核数据
   // map kernel data and the physical RAM we'll make use of.
   kvmmap((uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
 
+  // 映射trampoline
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
@@ -49,10 +57,13 @@ kvminit()
 
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
+// 启动内核页表
 void
 kvminithart()
 {
+  // 设置satp寄存器
   w_satp(MAKE_SATP(kernel_pagetable));
+  // 刷新TLB
   sfence_vma();
 }
 
@@ -68,17 +79,21 @@ kvminithart()
 //   21..29 -- 9 bits of level-1 index.
 //   12..20 -- 9 bits of level-0 index.
 //    0..11 -- 12 bits of byte offset within the page.
+// 页表遍历函数，为虚拟地址找到PTE
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
   if(va >= MAXVA)
     panic("walk");
 
+  // 遍历三级页表2，1，0
   for(int level = 2; level > 0; level--) {
+    //PX(level, va) 的作用是：从虚拟地址 va 中提取出第 level 级页表的索引。
     pte_t *pte = &pagetable[PX(level, va)];
-    if(*pte & PTE_V) {
+    if(*pte & PTE_V) {  //如果页表项有效
       pagetable = (pagetable_t)PTE2PA(*pte);
-    } else {
+    } else { // 如果页表项无效且需要分配
+      //分配失败
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
       memset(pagetable, 0, PGSIZE);
@@ -91,6 +106,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
 // Can only be used to look up user pages.
+// 虚拟地址转物理地址
 uint64
 walkaddr(pagetable_t pagetable, uint64 va)
 {
@@ -100,13 +116,17 @@ walkaddr(pagetable_t pagetable, uint64 va)
   if(va >= MAXVA)
     return 0;
 
+  // 找到虚拟地址所在的PTE
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
+  // 页表无效
   if((*pte & PTE_V) == 0)
     return 0;
+  // 无权限
   if((*pte & PTE_U) == 0)
     return 0;
+  // 提取物理地址
   pa = PTE2PA(*pte);
   return pa;
 }
@@ -114,9 +134,11 @@ walkaddr(pagetable_t pagetable, uint64 va)
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
+// 把虚拟地址映射到物理地址，箭囊里虚拟地址到物理地址的映射
 void
 kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
 {
+  // mappages将范围虚拟地址到同等范围物理地址的映射装载到一个页表中
   if(mappages(kernel_pagetable, va, sz, pa, perm) != 0)
     panic("kvmmap");
 }
@@ -145,6 +167,7 @@ kvmpa(uint64 va)
 // physical addresses starting at pa. va and size might not
 // be page-aligned. Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
+// 建立虚拟地址映射,在页表中建立虚拟地址到物理地址的映射关系。
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
@@ -196,6 +219,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
 // create an empty user page table.
 // returns 0 if out of memory.
+// 创建一张空的用户页表
 pagetable_t
 uvmcreate()
 {
@@ -225,6 +249,7 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
 
 // Allocate PTEs and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
+//为进程分配新的物理内存页，并建立虚拟地址映射。
 uint64
 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 {
@@ -236,7 +261,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += PGSIZE){
-    mem = kalloc();
+    mem = kalloc(); // 分配物理内存
     if(mem == 0){
       uvmdealloc(pagetable, a, oldsz);
       return 0;
@@ -305,6 +330,7 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
+// 复制进程内存,在fork时，把父进程的内存复制给子进程
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
@@ -351,6 +377,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
+// 复制数据到用户虚拟地址
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
@@ -376,6 +403,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
+// 从用户虚拟地址复制数据到内核
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
