@@ -83,24 +83,39 @@ struct trapframe {
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
+// 进程控制块PCB：描述了一个进程的所有信息
 struct proc {
   struct spinlock lock;
 
   // p->lock must be held when using these:
+  // 进程当前状态
   enum procstate state;        // Process state
+  // 父进程
   struct proc *parent;         // Parent process
   void *chan;                  // If non-zero, sleeping on chan
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
+  // 进程ID
   int pid;                     // Process ID
 
   // these are private to the process, so p->lock need not be held.
+  // 内核栈地址
   uint64 kstack;               // Virtual address of kernel stack
+  // 进程内存大小
   uint64 sz;                   // Size of process memory (bytes)
+  // 用户页表
   pagetable_t pagetable;       // User page table
+  // 陷阱帧
   struct trapframe *trapframe; // data page for trampoline.S
+  // 保存的寄存器上下文
   struct context context;      // swtch() here to run process
+  // 打开的文件
   struct file *ofile[NOFILE];  // Open files
+  // 当前工作目录
   struct inode *cwd;           // Current directory
+  // 进程名称
   char name[16];               // Process name (debugging)
+
+  // 存储进程独享的内核态页表
+  pagetable_t kernelpgtbl;
 };

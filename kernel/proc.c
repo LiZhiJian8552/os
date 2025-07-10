@@ -22,25 +22,46 @@ static void freeproc(struct proc *p);
 extern char trampoline[]; // trampoline.S
 
 // initialize the proc table at boot time.
+// procinit() 是 xv6 内核启动时调用的一个初始化函数。
+// 它的主要作用是：为所有进程分配和初始化进程控制块（PCB）、内核栈等资源，为后续进程管理和调度做好准备
+/*
 void
 procinit(void)
 {
   struct proc *p;
   
+  // 初始化全局pid_lock自旋锁
   initlock(&pid_lock, "nextpid");
+  // 遍历全局进程表proc，表中每个元素都是一个PCB控制块
   for(p = proc; p < &proc[NPROC]; p++) {
+      // 初始化每个进程的自旋锁
       initlock(&p->lock, "proc");
 
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
+      // 为每个进程分配一页物理内存，用作该进程的内核栈
       char *pa = kalloc();
       if(pa == 0)
         panic("kalloc");
+      // 计算该进程内核栈的虚拟地址，KSTACK(i) 是一个宏，返回第 i 个进程的内核栈在内核虚拟地址空间中的起始地址。
       uint64 va = KSTACK((int) (p - proc));
+      // 虚拟地址和物理地址进行映射
       kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
       p->kstack = va;
   }
+  kvminithart();
+}
+*/
+
+void 
+procinit(void){
+  struct proc* p;
+  initlock(&pid_lock,"nextpid");
+  for(p=proc;p<&proc[NPROC];p++){
+    initlock(&p->lock,"proc");
+  }
+
   kvminithart();
 }
 
@@ -89,11 +110,14 @@ allocpid() {
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
+
+// 分配一个新的进程控制块：在proc数据中找到一个未被使用的进程控制块，为这个进程分配必要的资源（如陷阱帧，页表等）
 static struct proc*
 allocproc(void)
 {
   struct proc *p;
 
+  //在proc数据中找到一个未被使用的进程控制块
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == UNUSED) {
@@ -105,21 +129,45 @@ allocproc(void)
   return 0;
 
 found:
+  //为新进程分配唯一的进程ID 
   p->pid = allocpid();
 
   // Allocate a trapframe page.
+  // 分配陷阱帧，用于保护进程进入内核态时的寄存器状态
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     release(&p->lock);
     return 0;
   }
 
-  // An empty user page table.
+  // An empty user page table
+  // 创建进程页表.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
   }
+
+
+  /*-----------------new add-------------------------*/ 
+  
+  // 为新进程创建独立的内核页表
+  p->kernelpgtbl=kvminit_newpgtbl();
+
+  // 分配一个物理页，作为新进程的内核栈使用
+  char* pa=kalloc();
+  if(pa==0){
+    panic("kalloc");
+  }
+  // 将内核栈映射到固定的逻辑地址上，0表示当前线程？
+  uint64 va=KSTACK((int)0);
+  // 将va映射到pa上
+  kvmmap(p->kernelpgtbl,va,(uint64)pa,PGSIZE,PTE_R|PTE_W);
+  // 将内核栈的逻辑地址记入到进程控制块中
+  p->kstack=va;
+
+
+  /*-------------------------------------------------*/ 
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -133,15 +181,19 @@ found:
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
+// 释放进程控制块
 static void
 freeproc(struct proc *p)
 {
+  // 释放陷阱帧
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  // 释放页表
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -149,6 +201,20 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+
+
+  // 释放进程的内核栈
+  // 找到内存栈的物理地址
+  void* kstack_pa=(void*)kvmpa(p->kernelpgtbl,p->kstack);
+  // 释放内存栈
+  kfree(kstack_pa);
+  p->kstack=0;  //置空,避免野指针
+
+
+  // 递归释放进程独占的内核页表,释放页表本身所占用的空间,但是不释放页表指向的物理页
+  kvm_free_kernelpgtbl(p->kernelpgtbl);
+  p->kernelpgtbl=0;
+
   p->state = UNUSED;
 }
 
@@ -454,37 +520,65 @@ wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+/*
+  核心调度器函数
+    1. 循环查找处于 RUNNABLE 状态的进程 （即可运行的进程）
+    2. 选择其中一个进程 （简单轮询），将其状态改为 RUNNING
+    3. 通过上下文切换（swtch） ，将 CPU 控制权交给这个进程。
+    4. 当进程主动让出 CPU（如发生系统调用或中断）时，重新开始调度.
+*/ 
 void
 scheduler(void)
 {
   struct proc *p;
+  // 获取当前CPU的信息
   struct cpu *c = mycpu();
   
+  // 将当前CPU的proc指针初始化为NULL,表示当前CPU没有运行任何进程
   c->proc = 0;
+  // 开启调度
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
+    // 启用中断，确保设备（如键盘、磁盘）可以触发中断，避免死锁
     intr_on();
     
+    // 查找可运行的进程
     int found = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
+      // 如果当前进程状态为可运行状态
       if(p->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
+        // 设置为运行态
         p->state = RUNNING;
+        // 将cpu当前运行的进程指针指向当前线程
         c->proc = p;
+
+        // 切换到进程独立的内核页表,将该进程的内核页表地址放到satp中
+        w_satp(MAKE_SATP(p->kernelpgtbl));
+        // 清除快表缓存
+        sfence_vma();
+
+
+        // 进行上下文切换，主要是保存当前CPU的寄存器状态，并加载进程p的寄存器状态，从而跳转到进程p的代码执行
         swtch(&c->context, &p->context);
+
+        // 切换回全局内核页表
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        // 运行到此处表示进程结束或遇到中断，让出CPU
         c->proc = 0;
 
         found = 1;
       }
       release(&p->lock);
     }
-#if !defined (LAB_FS)
+// 无进程可运行时的处理
+#if !defined (LAB_FS) //如果未定义 LAB_FS（文件系统实验阶段），则启用低功耗模式。
     if(found == 0) {
       intr_on();
       asm volatile("wfi");
