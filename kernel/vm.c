@@ -296,6 +296,7 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 
 // Recursively free page-table pages.
 // All leaf mappings must already have been removed.
+// 递归遍历页表并释放
 void
 freewalk(pagetable_t pagetable)
 {
@@ -467,4 +468,34 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+// 递归遍历三级页表，并打印页表中的所有内容
+int gptblprint(pagetable_t pagetable,int depth){
+  // 一张表中有2^9个项(每级页表都有9位)
+  for(int i=0;i<512;i++){
+    pte_t pte=pagetable[i];
+    if((pte&PTE_V)){  //该页有效
+      printf("..");
+      // 每增加一层多输出' ..'
+      for(int j=0;j<depth;j++){
+        printf(" ..");
+      }
+      printf("%d: pte %p pa %p\n",i,pte,PTE2PA(pte));
+
+      // 如果不是叶子页表
+      if((pte&(PTE_R|PTE_W|PTE_X))==0){
+        // 下一级的物理地址
+        uint64 child=PTE2PA(pte);
+        gptblprint((pagetable_t)child,depth+1);
+      }
+    }
+  }
+  return 0;
+}
+
+// 打印页表
+int vmprint(pagetable_t pagetable){
+  printf("page table %p\n",pagetable);
+  return gptblprint(pagetable,0);
 }
