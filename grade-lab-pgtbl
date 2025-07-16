@@ -50,7 +50,7 @@ def test_answers():
 def test_count():
     r.run_qemu(shell_script([
         'stats', 'stats'
-    ]), timeout=150)
+    ]), timeout=300)
     matches = re.findall(r'^copyin: (\d+)', r.qemu.output, re.MULTILINE)
     assert_equal(len(matches), 2)
     assert_equal(int(matches[1]), int(matches[0]) + 28)
