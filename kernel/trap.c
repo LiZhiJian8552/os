@@ -67,10 +67,17 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+  }else {
+    // 出错的虚拟地址
+    uint64 va=r_stval();
+    // 判断是否是缺页，然后判断该虚拟地址是否在可分配的范围呢，并且确实不存在页
+    if((r_scause()==13||r_scause()==15)&&uvmshouldallocate(va)){
+      uvmlazyallocate(va);
+    }else{
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
   if(p->killed)
