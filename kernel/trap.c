@@ -67,7 +67,12 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } else if((r_scause()==13||r_scause()==15)&&uvmcheckcowpage(r_stval())){  //(r_scause()==13||r_scause()==15)表示加载页错误或存储页错误，r_stval()出现页错误的虚拟地址
+    // 出现页错误并且确实是因为写复制导致的,则为其分配一个新的物理页，并与pte建立映射
+    if(uvmcowcopy(r_stval())==-1){
+      p->killed=1;
+    }
+  }else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;

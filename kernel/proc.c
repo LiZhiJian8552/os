@@ -263,6 +263,7 @@ fork(void)
   struct proc *p = myproc();
 
   // Allocate process.
+  // 分配PCB
   if((np = allocproc()) == 0){
     return -1;
   }
