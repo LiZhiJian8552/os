@@ -17,6 +17,9 @@ struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
+// 锁，防止多个线程同时修改哈希表
+pthread_mutex_t lock;
+
 double
 now()
 {
@@ -25,6 +28,7 @@ now()
  return tv.tv_sec + tv.tv_usec / 1000000.0;
 }
 
+// 拉链法，解决哈希冲突
 static void 
 insert(int key, int value, struct entry **p, struct entry *n)
 {
@@ -38,6 +42,7 @@ insert(int key, int value, struct entry **p, struct entry *n)
 static 
 void put(int key, int value)
 {
+  pthread_mutex_lock(&lock);
   int i = key % NBUCKET;
 
   // is the key already present?
@@ -46,6 +51,7 @@ void put(int key, int value)
     if (e->key == key)
       break;
   }
+  // 在此处加锁可以吗??---->有可能线程1在访问过程中，切换到线程2修改了哈希表
   if(e){
     // update the existing key.
     e->value = value;
@@ -53,6 +59,7 @@ void put(int key, int value)
     // the new is new.
     insert(key, value, &table[i], table[i]);
   }
+  pthread_mutex_unlock(&lock);
 }
 
 static struct entry*
@@ -102,6 +109,9 @@ main(int argc, char *argv[])
   pthread_t *tha;
   void *value;
   double t1, t0;
+  // 初始化线程锁
+  pthread_mutex_init(&lock,NULL);
+
 
   if (argc < 2) {
     fprintf(stderr, "Usage: %s nthreads\n", argv[0]);

@@ -10,15 +10,37 @@
 #define STACK_SIZE  8192
 #define MAX_THREAD  4
 
+// 线程的寄存器
+struct context{
+  // 程序计数器
+  uint64 ra;
+  // 用户栈针
+  uint64 sp;
+
+  // callee-saved寄存器
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
 
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
-
+  struct context context;
 };
+
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
-extern void thread_switch(uint64, uint64);
+extern void thread_switch(struct context* old, struct context* new);
               
 void 
 thread_init(void)
@@ -41,6 +63,7 @@ thread_schedule(void)
   next_thread = 0;
   t = current_thread + 1;
   for(int i = 0; i < MAX_THREAD; i++){
+    // 超出了线程数组的范围，则从第0个线程开始
     if(t >= all_thread + MAX_THREAD)
       t = all_thread;
     if(t->state == RUNNABLE) {
@@ -49,7 +72,7 @@ thread_schedule(void)
     }
     t = t + 1;
   }
-
+  // 没有RUNNABLE的线程
   if (next_thread == 0) {
     printf("thread_schedule: no runnable threads\n");
     exit(-1);
@@ -59,10 +82,9 @@ thread_schedule(void)
     next_thread->state = RUNNING;
     t = current_thread;
     current_thread = next_thread;
-    /* YOUR CODE HERE
-     * Invoke thread_switch to switch from t to next_thread:
-     * thread_switch(??, ??);
-     */
+    /*------------------new add ----------------------------*/
+    thread_switch(&(t->context),&(current_thread->context));
+    /*------------------new add end----------------------------*/
   } else
     next_thread = 0;
 }
@@ -71,12 +93,16 @@ void
 thread_create(void (*func)())
 {
   struct thread *t;
-
+  // 找到空闲可用的线程
   for (t = all_thread; t < all_thread + MAX_THREAD; t++) {
     if (t->state == FREE) break;
   }
   t->state = RUNNABLE;
-  // YOUR CODE HERE
+  /*---------------new add--------------------*/
+  // 线程创建完成之后，将该线程的程序计数器的值设置为要执行的函数指针，即函数的首地址
+  t->context.ra=(uint64)func; 
+  // 设置栈指针,将栈指针指向栈的最高位，栈是从高到低的
+  t->context.sp=(uint64)&t->stack+(STACK_SIZE-1);
 }
 
 void 
@@ -86,7 +112,9 @@ thread_yield(void)
   thread_schedule();
 }
 
+// 表示是否被创建
 volatile int a_started, b_started, c_started;
+// a,b,c线程输出的值
 volatile int a_n, b_n, c_n;
 
 void 
