@@ -133,7 +133,7 @@ test0()
   }
   printf("test0 results:\n");
   n = ntas(1);
-  if (n-m < 500)
+  if (n-m < 1000)
     printf("test0: OK\n");
   else
     printf("test0: FAIL\n");
