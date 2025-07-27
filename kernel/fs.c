@@ -24,6 +24,7 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 // there should be one superblock per disk device, but we run with
 // only one device
+// 超级块
 struct superblock sb; 
 
 // Read the super block.
@@ -61,6 +62,7 @@ bzero(int dev, int bno)
 // Blocks.
 
 // Allocate a zeroed disk block.
+// 找到一个空闲块，并标记未已使用，返回该块的块号
 static uint
 balloc(uint dev)
 {
@@ -68,14 +70,21 @@ balloc(uint dev)
   struct buf *bp;
 
   bp = 0;
+  // 遍历超级块中记录的磁盘总块数，BPB每个块位图可以管理的块数，每次循环处理一个位图块，每个位图块管理这BPB个磁盘块
   for(b = 0; b < sb.size; b += BPB){
+    // 读取位图块，BBLOCK(b, sb)计算b对应的位图块号
     bp = bread(dev, BBLOCK(b, sb));
+    // 循环位图块
     for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
+      // 计算位掩码，bi % 8表示该块在位图块字节的第几位
       m = 1 << (bi % 8);
+      // bp->data[bi/8]定位到位图块中对应的字节
       if((bp->data[bi/8] & m) == 0){  // Is block free?
+        // 表示为已分配
         bp->data[bi/8] |= m;  // Mark block in use.
         log_write(bp);
         brelse(bp);
+        // 清空
         bzero(dev, b + bi);
         return b + bi;
       }
@@ -199,6 +208,7 @@ ialloc(uint dev, short type)
   struct buf *bp;
   struct dinode *dip;
 
+  // inum=0表示是引导块
   for(inum = 1; inum < sb.ninodes; inum++){
     bp = bread(dev, IBLOCK(inum, sb));
     dip = (struct dinode*)bp->data + inum%IPB;
@@ -297,7 +307,9 @@ ilock(struct inode *ip)
   acquiresleep(&ip->lock);
 
   if(ip->valid == 0){
+    //通过IBLOCK宏可以计算出该inode所在的磁盘块。
     bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+    // 从磁盘块中找到该inode对应的块
     dip = (struct dinode*)bp->data + ip->inum%IPB;
     ip->type = dip->type;
     ip->major = dip->major;
@@ -374,35 +386,106 @@ iunlockput(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
-static uint
-bmap(struct inode *ip, uint bn)
-{
-  uint addr, *a;
-  struct buf *bp;
+// // 给定一个inode和逻辑块号，然后对应的物理磁盘块地址
+// static uint
+// bmap(struct inode *ip, uint bn)
+// {
+//   uint addr, *a;
+//   struct buf *bp;
 
-  if(bn < NDIRECT){
-    if((addr = ip->addrs[bn]) == 0)
-      ip->addrs[bn] = addr = balloc(ip->dev);
+//   // 直接存储的文件块区域
+//   if(bn < NDIRECT){
+//     if((addr = ip->addrs[bn]) == 0)
+//       ip->addrs[bn] = addr = balloc(ip->dev);
+//     return addr;
+//   }
+//   // 获取间接块号
+//   bn -= NDIRECT;
+
+//   // 在间接块号范围内
+//   if(bn < NINDIRECT){
+//     // Load indirect block, allocating if necessary.
+//     // 如果间接块还未分配，则分配一个
+//     if((addr = ip->addrs[NDIRECT]) == 0)
+//       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+//     // 读取间接块
+//     bp = bread(ip->dev, addr);
+//     // 获取间接块数据的首地址
+//     a = (uint*)bp->data;
+//     if((addr = a[bn]) == 0){
+//       a[bn] = addr = balloc(ip->dev);
+//       log_write(bp);
+//     }
+//     brelse(bp);
+//     return addr;
+//   }
+
+//   panic("bmap: out of range");
+// }
+
+// 支持二级间接块
+static uint
+bmap(struct inode* ip,uint bn){
+  uint addr,*a;
+  struct buf* bp;
+
+  // 如果bn小于直接块的数量，则在直接块中处理
+  if(bn<NDIRECT){
+    if((addr=ip->addrs[bn])==0){
+      ip->addrs[bn]=addr=balloc(ip->dev);
+    }
     return addr;
   }
-  bn -= NDIRECT;
 
-  if(bn < NINDIRECT){
-    // Load indirect block, allocating if necessary.
-    if((addr = ip->addrs[NDIRECT]) == 0)
-      ip->addrs[NDIRECT] = addr = balloc(ip->dev);
-    bp = bread(ip->dev, addr);
-    a = (uint*)bp->data;
-    if((addr = a[bn]) == 0){
-      a[bn] = addr = balloc(ip->dev);
+  // 不在直接块呢
+  bn=bn-NDIRECT;
+  if(bn<NINDIRECT){
+    if((addr=ip->addrs[NDIRECT])==0){
+      ip->addrs[NDIRECT]=addr=balloc(ip->dev);
+    }
+
+    bp=bread(ip->dev,addr);
+    a=(uint*)bp->data;
+    if((addr=a[bn])==0){
+      a[bn]=addr=balloc(ip->dev);
       log_write(bp);
     }
     brelse(bp);
     return addr;
   }
+  
+  // 不在一级间接块呢
+  bn=bn-NINDIRECT;
 
+  if(bn<NINDIRECT*NINDIRECT){
+    if((addr=ip->addrs[NDIRECT+1])==0){
+      ip->addrs[NDIRECT+1]=addr=balloc(ip->dev);
+    }
+
+    bp=bread(ip->dev,addr);
+    a=(uint*)bp->data;
+    // a[bn/NINDIRECT]表示在二级间接块的第几个位置
+    if((addr=a[bn/NINDIRECT])==0){
+      a[bn/NINDIRECT]=addr=balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+
+    //bn%=NINDIRECT表示在第几个位置的哪个地方 
+    bn%=NINDIRECT;
+    bp=bread(ip->dev,addr);
+    a=(uint*)bp->data;
+    if((addr=a[bn])==0){
+      a[bn]=addr=balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
   panic("bmap: out of range");
 }
+
+
 
 // Truncate inode (discard contents).
 // Caller must hold ip->lock.
@@ -413,6 +496,7 @@ itrunc(struct inode *ip)
   struct buf *bp;
   uint *a;
 
+  // 释放所有的直接块
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
       bfree(ip->dev, ip->addrs[i]);
@@ -420,6 +504,7 @@ itrunc(struct inode *ip)
     }
   }
 
+  // 释放所有的一级块
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
@@ -431,6 +516,29 @@ itrunc(struct inode *ip)
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
   }
+
+  // 释放所有的二级快
+  if(ip->addrs[NDIRECT+1]){
+    bp=bread(ip->dev,ip->addrs[NDIRECT+1]);
+    a=(uint*)bp->data;
+    for(int i=0;i<NDIRECT;i++){
+      if(a[i]){
+        struct buf* bp2=bread(ip->dev,a[i]);
+        uint* a2=(uint*)bp2->data;
+        for(int j=0;j<NDIRECT;j++){
+          if(a2[j]){
+            bfree(ip->dev,a2[j]);
+          }
+        }
+        brelse(bp2);
+        bfree(ip->dev,a[i]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev,ip->addrs[NDIRECT+1]);
+    ip->addrs[NDIRECT+1]=0;
+  }
+
 
   ip->size = 0;
   iupdate(ip);

@@ -28,6 +28,7 @@ main(int argc, char *argv[])
 static void
 cleanup(void)
 {
+
   unlink("/testsymlink/a");
   unlink("/testsymlink/b");
   unlink("/testsymlink/c");
@@ -38,6 +39,7 @@ cleanup(void)
   unlink("/testsymlink/z");
   unlink("/testsymlink/y");
   unlink("/testsymlink");
+
 }
 
 // stat a symbolic link using O_NOFOLLOW
