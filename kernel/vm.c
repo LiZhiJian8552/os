@@ -6,6 +6,12 @@
 #include "defs.h"
 #include "fs.h"
 
+
+#include "fcntl.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "proc.h"
 /*
  * the kernel's page table.
  */
@@ -427,5 +433,52 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
+  }
+}
+
+
+// 释放mmap映射的页
+void
+vmaunmap(pagetable_t pagetable,uint64 va,uint64 nbytes,struct vma* v){
+  uint64 a;
+  pte_t* pte;
+
+  // 遍历从va开始的每一页，步长为PGSIZE（页面大小）
+  for(a=va;a<va+nbytes;a+=PGSIZE){
+    // 读取va对应的pte
+    // 使用walk函数查找当前虚拟地址a对应的页表项（PTE）
+    if((pte=walk(pagetable,a,0))==0){
+      continue;
+    }
+    //检查PTE的标志位，如果它是一个叶子页表项（即指向实际物理页），那么它不应该只有PTE_V（有效位）而没有其他权限位.
+    if(PTE_FLAGS(*pte)==PTE_V){
+      panic("sys_munmap: not a leaf");
+    } 
+
+    if(*pte&PTE_V){
+      uint64 pa=PTE2PA(*pte);
+      // 该页被修改过，并且设置了需写回
+      if((*pte&PTE_D)&&(v->flags & MAP_SHARED )){
+        begin_op();
+        ilock(v->f->ip);
+        // 相对于vma的偏移量
+        uint64 aoff=a-v->vastart;
+        // 当前页的起始部分不在VMA内
+        if(aoff<0){
+          writei(v->f->ip,0,pa+(-aoff),v->offset,PGSIZE+aoff);
+        }else if(aoff+PGSIZE>v->sz){
+           
+          writei(v->f->ip,0,pa,v->offset+aoff,v->sz-aoff);
+        }else{
+          // 整个也都在VMA内
+          writei(v->f->ip,0,pa,v->offset+aoff,PGSIZE);
+        }
+
+        iunlock(v->f->ip);
+        end_op();
+      }
+      kfree((void*)pa);
+      *pte=0;
+    }
   }
 }

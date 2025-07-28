@@ -86,6 +86,26 @@ enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 #define NVMA 16
 
 
+// 定义一个虚拟内存区域结构体，用于记录mmap创建的虚拟内存地址的范围、长度、权限、文件等
+struct vma{
+  // 该虚拟内存区域是否已被映射
+  int valid;
+  // 该虚拟内存区域开始地址
+  uint64 vastart;
+  // 该虚拟内存区域大小
+  uint64 sz;
+  // 该虚拟内存区域映射的文件
+  struct file* f;
+  // 该虚拟内存区域权限
+  int prot;
+  // 标记映射内存的修饰是否写回文件
+  int flags;
+  // 映射文件的起点
+  uint64 offset;
+};
+
+
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -110,23 +130,5 @@ struct proc {
   struct vma vmas[NVMA];       //mmap虚拟内存映射地址数组，最多16个
 };
 
-
-// 定义一个虚拟内存区域结构体，用于记录mmap创建的虚拟内存地址的范围、长度、权限、文件等
-struct vma{
-  // 该虚拟内存区域是否已被映射
-  int valid;
-  // 该虚拟内存区域开始地址
-  uint64 vastart;
-  // 该虚拟内存区域大小
-  uint64 sz;
-  // 该虚拟内存区域映射的文件
-  struct file* f;
-  // 该虚拟内存区域权限
-  int prot;
-  // 标记映射内存的修饰是否写回文件
-  int flags;
-  // 映射文件的起点
-  uint64 offset;
-};
 
 
